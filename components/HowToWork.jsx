@@ -1,6 +1,10 @@
-'use client';
+'use client'
 
-export default function HowToWorks() {
+import { useCTA } from '../hooks/useCTA'
+
+export default function HowToWork() {
+  const { user, loading, handleStartTrial } = useCTA()
+
   const steps = [
     {
       id: 1,
@@ -55,8 +59,19 @@ export default function HowToWorks() {
           ))}
         </div>
 
-        <button className="bg-blue-500 hover:bg-blue-600 text-white font-semibold px-6 py-3 rounded-full transition">
-          Start Your Free Trial →
+        <button 
+          onClick={handleStartTrial}
+          disabled={loading}
+          className="bg-blue-500 hover:bg-blue-600 text-white font-semibold px-6 py-3 rounded-full transition disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {loading ? (
+            <div className="flex items-center justify-center">
+              <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+              Loading...
+            </div>
+          ) : (
+            user ? 'Go to Dashboard →' : 'Start Your Free Trial →'
+          )}
         </button>
       </div>
     </section>

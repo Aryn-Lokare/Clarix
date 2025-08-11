@@ -24,6 +24,12 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+input::placeholder,
+textarea::placeholder {
+  color: #6b7280; /* Tailwind gray-500 */
+  opacity: 1; /* Ensure consistent placeholder visibility */
+}
 @font-face {
   font-family: 'Satoshi';
   src: url('/fonts/Satoshi-Light.otf') format('opentype');
@@ -57,4 +63,97 @@ body {
   src: url('/fonts/Satoshi-Black.otf') format('opentype');
   font-weight: 900;
   font-style: normal;
+}
+
+/* Custom animations */
+@keyframes blob {
+  0% {
+    transform: translate(0px, 0px) scale(1);
+  }
+  33% {
+    transform: translate(30px, -50px) scale(1.1);
+  }
+  66% {
+    transform: translate(-20px, 20px) scale(0.9);
+  }
+  100% {
+    transform: translate(0px, 0px) scale(1);
+  }
+}
+
+.animate-blob {
+  animation: blob 7s infinite;
+}
+
+.animation-delay-2000 {
+  animation-delay: 2s;
+}
+
+.animation-delay-4000 {
+  animation-delay: 4s;
+}
+
+@keyframes float {
+  0% {
+    transform: translateY(0px);
+    opacity: 0.3;
+  }
+  50% {
+    transform: translateY(-20px);
+    opacity: 0.7;
+  }
+  100% {
+    transform: translateY(0px);
+    opacity: 0.3;
+  }
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+/* Custom utility classes */
+.font-satoshi {
+  font-family: 'Satoshi', sans-serif;
+}
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Focus styles */
+.focus-visible:focus {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+}
+
+/* Hide browser extension attributes to prevent hydration issues */
+button[fdprocessedid],
+input[fdprocessedid],
+form[fdprocessedid] {
+  /* Browser extensions add these attributes, but we want to ignore them for hydration */
+}
+
+/* Suppress hydration warnings for elements that might be modified by browser extensions */
+.hydration-safe {
+  /* This class can be used on elements that might have attributes added by browser extensions */
 }
