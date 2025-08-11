@@ -35,6 +35,10 @@ INSERT INTO auth.users (
   '{"role": "super_admin"}'
 );
 
+
+
+
+
 -- Step 3: Get the created user ID and create profile
 WITH new_user AS (
   SELECT id, email FROM auth.users WHERE email = '<REPLACE_WITH_ADMIN_EMAIL>'
