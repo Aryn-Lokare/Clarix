@@ -6,8 +6,10 @@ CREATE TABLE IF NOT EXISTS profiles (
     id UUID REFERENCES auth.users(id) ON DELETE CASCADE PRIMARY KEY,
     email TEXT UNIQUE NOT NULL,
     role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'doctor', 'super_admin')),
+    username TEXT UNIQUE,
     first_name TEXT,
     last_name TEXT,
+    approved BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -136,8 +138,14 @@ CREATE TRIGGER update_diagnoses_updated_at BEFORE UPDATE ON diagnoses
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
-    INSERT INTO public.profiles (id, email, role)
-    VALUES (NEW.id, NEW.email, COALESCE(NEW.raw_user_meta_data->>'role', 'user'));
+    INSERT INTO public.profiles (id, email, role, username, approved)
+    VALUES (
+        NEW.id,
+        NEW.email,
+        COALESCE(NEW.raw_user_meta_data->>'role', 'user'),
+        NULLIF(NEW.raw_user_meta_data->>'username', ''),
+        CASE WHEN COALESCE(NEW.raw_user_meta_data->>'role', 'user') = 'doctor' THEN FALSE ELSE TRUE END
+    );
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;

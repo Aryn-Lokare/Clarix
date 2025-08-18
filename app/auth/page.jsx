@@ -2,21 +2,31 @@
 
 import { useState, useEffect } from 'react'
 import { supabase, USER_ROLES } from '../../lib/supabase'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 
 export default function AuthPage() {
   const [isLogin, setIsLogin] = useState(true)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [username, setUsername] = useState('')
+  const [signupRole, setSignupRole] = useState(USER_ROLES.USER)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [mounted, setMounted] = useState(false)
   const router = useRouter()
+  const searchParams = useSearchParams()
 
   useEffect(() => {
     setMounted(true)
   }, [])
+
+  useEffect(() => {
+    const pending = searchParams?.get('pending')
+    if (pending) {
+      setError('Your doctor account is awaiting super admin approval.')
+    }
+  }, [searchParams])
 
   const handleAuth = async (e) => {
     e.preventDefault()
@@ -45,13 +55,14 @@ export default function AuthPage() {
         if (profileError && profileError.code === 'PGRST116') {
           const { data: newProfile, error: createError } = await supabase
             .from('profiles')
-            .insert({
-              id: data.user.id,
-              email: data.user.email,
-              role: 'user'
-            })
-            .select()
-            .single()
+            .upsert({
+            id: data.user.id,
+            email: data.user.email,
+            role: 'user',
+            username: data.user.user_metadata?.username || null
+          })
+           .select()
+           .single()
 
           if (createError) {
             throw new Error('Failed to create user profile')
@@ -61,21 +72,40 @@ export default function AuthPage() {
           throw profileError
         }
 
+        // Ensure username is set if missing but provided in metadata
+        try {
+          if ((profile && !profile.username) && data.user.user_metadata?.username) {
+            await supabase
+              .from('profiles')
+              .update({ username: data.user.user_metadata.username })
+              .eq('id', data.user.id)
+          }
+        } catch {}
+
+        // Block unapproved doctors
+        if (profile.role === USER_ROLES.DOCTOR && !profile.approved) {
+          await supabase.auth.signOut()
+          throw new Error('Your doctor account is awaiting approval from a super admin.')
+        }
+
         // Redirect based on role
-        if (profile.role === 'super_admin') {
+        if (profile.role === USER_ROLES.SUPER_ADMIN) {
           router.push('/admin')
         } else {
           router.push('/dashboard')
         }
       } else {
-        // Signup - Only allow USER role
+        // Signup - allow selecting role (user or doctor)
+        const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || (typeof window !== 'undefined' ? window.location.origin : '')
         const { data, error } = await supabase.auth.signUp({
           email,
           password,
           options: {
             data: {
-              role: USER_ROLES.USER, // Force user role for signup
-            }
+              role: signupRole,
+              username,
+            },
+            emailRedirectTo: `${siteUrl}/auth?verified=1`
           }
         })
 
@@ -86,15 +116,17 @@ export default function AuthPage() {
           if (data.user.email_confirmed_at || data.session) {
             // Create profile immediately for confirmed users
             try {
+              const approved = signupRole !== USER_ROLES.DOCTOR
               const { error: profileError } = await supabase
                 .from('profiles')
-                .insert({
+                .upsert({
                   id: data.user.id,
                   email: data.user.email,
-                  role: USER_ROLES.USER
+                  role: signupRole,
+                  username,
+                  approved
                 })
-
-              if (profileError && profileError.code !== '23505') { // Ignore duplicate key errors
+              if (profileError && profileError.code !== '23505') {
                 console.error('Profile creation error:', profileError)
               }
             } catch (err) {
@@ -107,6 +139,8 @@ export default function AuthPage() {
           }
           setEmail('')
           setPassword('')
+          setUsername('')
+          setSignupRole(USER_ROLES.USER)
         }
       }
     } catch (error) {
@@ -212,14 +246,46 @@ export default function AuthPage() {
           </div>
 
           <form className="space-y-6" onSubmit={handleAuth}>
-            {/* Welcome message for signup */}
+            {/* Role selection (signup only) */}
             {!isLogin && (
-              <div className="text-center p-6 bg-gradient-to-r from-blue-500/20 to-purple-500/20 rounded-xl border border-blue-400/30 backdrop-blur-sm">
-                <div className="text-4xl mb-3">🚀</div>
-                <h3 className="text-xl font-bold text-white mb-2">Ready to get started?</h3>
-                <p className="text-gray-300 text-sm">
-                  Join thousands of users already using Clarix to streamline their workflow
-                </p>
+              <div>
+                <label className="block text-sm font-medium text-gray-200 mb-2">Select Role</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button type="button" onClick={() => setSignupRole(USER_ROLES.USER)} className={`px-4 py-3 rounded-lg border ${signupRole===USER_ROLES.USER? 'border-blue-400 bg-blue-500/20 text-white':'border-white/20 text-gray-300 hover:bg-white/10'}`}>
+                    User
+                  </button>
+                  <button type="button" onClick={() => setSignupRole(USER_ROLES.DOCTOR)} className={`px-4 py-3 rounded-lg border ${signupRole===USER_ROLES.DOCTOR? 'border-purple-400 bg-purple-500/20 text-white':'border-white/20 text-gray-300 hover:bg-white/10'}`}>
+                    Doctor
+                  </button>
+                </div>
+                <p className="mt-2 text-xs text-gray-300">Doctor accounts require super admin approval before first login.</p>
+              </div>
+            )}
+            {/* Removed signup welcome box */}
+
+            {/* Username (signup only) */}
+            {!isLogin && (
+              <div>
+                <label htmlFor="username" className="block text-sm font-medium text-gray-200 mb-2">
+                  Username
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <svg className="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.121 17.804A13.937 13.937 0 0112 15c2.5 0 4.847.655 6.879 1.804M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                  </div>
+                  <input
+                    id="username"
+                    name="username"
+                    type="text"
+                    required
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    className="w-full pl-10 pr-4 py-3 bg-white/10 backdrop-blur-sm border border-white/20 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 text-white placeholder-gray-300"
+                    placeholder="Choose a username"
+                  />
+                </div>
               </div>
             )}
 

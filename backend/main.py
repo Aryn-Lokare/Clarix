@@ -8,6 +8,9 @@ from typing import Optional, List
 import json
 from datetime import datetime
 import uuid
+import io
+from PIL import Image
+import numpy as np
 
 # Load environment variables
 load_dotenv()
@@ -30,6 +33,118 @@ supabase: Client = create_client(supabase_url, supabase_key)
 
 # Security
 security = HTTPBearer()
+
+# ---------------- Inference Model (best densenet) ----------------
+INFERENCE_MODEL_PATH = os.getenv("MODEL_PATH")
+_model_loaded = False
+_use_onnx = False
+_onnx_session = None
+_torch_model = None
+
+def _discover_model_path() -> str:
+    if INFERENCE_MODEL_PATH and os.path.exists(INFERENCE_MODEL_PATH):
+        return INFERENCE_MODEL_PATH
+    # Try to find a model under ./models
+    candidate_dir = os.path.join(os.path.dirname(__file__), "models")
+    if os.path.isdir(candidate_dir):
+        for fname in os.listdir(candidate_dir):
+            lower = fname.lower()
+            if ("best" in lower or "densenet" in lower) and (lower.endswith(".onnx") or lower.endswith(".pt") or lower.endswith(".pth")):
+                return os.path.join(candidate_dir, fname)
+    # Fallback to default names
+    for fallback in [
+        os.path.join(os.path.dirname(__file__), "models", "best densenet.onnx"),
+        os.path.join(os.path.dirname(__file__), "models", "best densenet.pt"),
+        os.path.join(os.path.dirname(__file__), "models", "best_densenet.onnx"),
+        os.path.join(os.path.dirname(__file__), "models", "best_densenet.pt"),
+    ]:
+        if os.path.exists(fallback):
+            return fallback
+    return None
+
+def _load_model_if_needed():
+    global _model_loaded, _use_onnx, _onnx_session, _torch_model
+    if _model_loaded:
+        return
+    model_path = _discover_model_path()
+    if not model_path:
+        print("[inference] No model file found. Set MODEL_PATH or place file under backend/models/")
+        _model_loaded = True
+        return
+    try:
+        if model_path.lower().endswith('.onnx'):
+            import onnxruntime as ort
+            _onnx_session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"]) 
+            _use_onnx = True
+        else:
+            import torch
+            _torch_model = torch.jit.load(model_path, map_location="cpu")
+            _torch_model.eval()
+            _use_onnx = False
+        print(f"[inference] Loaded model: {model_path} (onnx={_use_onnx})")
+    except Exception as e:
+        print(f"[inference] Failed to load model {model_path}: {e}")
+    finally:
+        _model_loaded = True
+
+def _preprocess(image_np: np.ndarray) -> np.ndarray:
+    # Resize to 224, normalize to ImageNet stats; adjust per your training
+    try:
+        import cv2
+    except Exception:
+        raise HTTPException(status_code=500, detail="OpenCV not installed on server")
+    img = image_np
+    if img.ndim == 2:
+        img = np.stack([img, img, img], axis=-1)
+    img = cv2.resize(img, (224, 224))
+    img = img.astype(np.float32) / 255.0
+    mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+    std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+    img = (img - mean) / std
+    img = np.transpose(img, (2, 0, 1))  # CHW
+    img = np.expand_dims(img, 0)        # NCHW
+    return img
+
+def _postprocess(logits: np.ndarray):
+    # Map to a small set of labels; adapt to your trained classes
+    default_labels = ["Pneumonia", "Cardiomegaly", "Lung Opacity", "Fracture"]
+    x = logits.squeeze()
+    # If single value, wrap
+    if x.ndim == 0:
+        x = np.array([x])
+    # Heuristic: if looks like multi-label, use sigmoid; else softmax
+    if x.size <= len(default_labels):
+        probs = 1.0 / (1.0 + np.exp(-x))
+    else:
+        e = np.exp(x - np.max(x))
+        probs = e / np.sum(e)
+    results = []
+    for idx, p in enumerate(probs):
+        label = default_labels[idx] if idx < len(default_labels) else f"Class {idx}"
+        results.append({"label": label, "confidence": float(p)})
+    results.sort(key=lambda d: d["confidence"], reverse=True)
+    return results[:5]
+
+def run_inference(image_np: np.ndarray):
+    _load_model_if_needed()
+    if _onnx_session is None and _torch_model is None:
+        raise HTTPException(status_code=500, detail="Model not available on server")
+    inp = _preprocess(image_np)
+    if _use_onnx:
+        input_name = _onnx_session.get_inputs()[0].name
+        outputs = _onnx_session.run(None, {input_name: inp})
+        logits = outputs[0]
+    else:
+        import torch
+        with torch.no_grad():
+            tensor = torch.from_numpy(inp)
+            logits = _torch_model(tensor)
+            if hasattr(logits, 'detach'):
+                logits = logits.detach().cpu().numpy()
+            else:
+                logits = np.array(logits)
+    predictions = _postprocess(logits)
+    return {"predictions": predictions}
 
 # Models
 class DiagnosisRequest:
@@ -102,6 +217,19 @@ async def get_user_profile(user_id: str):
         print(f"Error getting user profile: {e}")
         return None
 
+async def require_active_account(user_id: str):
+    """
+    Ensure the account is allowed to use the app.
+    Blocks unapproved doctors.
+    Returns profile on success.
+    """
+    profile = await get_user_profile(user_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="User profile not found")
+    if profile.get("role") == "doctor" and not profile.get("approved", False):
+        raise HTTPException(status_code=403, detail="Doctor account awaiting super admin approval")
+    return profile
+
 @app.get("/")
 async def root():
     return {"message": "Clarix AI Radiology Assistant API", "version": "1.0.0"}
@@ -109,6 +237,35 @@ async def root():
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+
+@app.post("/api/ai/predict")
+async def ai_predict(
+    file: UploadFile = File(...),
+    user: dict = Depends(get_current_user)
+):
+    # Only doctors or super admins can run predictions
+    profile = await require_active_account(user['id'])
+    if profile.get("role") not in ["doctor", "super_admin"]:
+        raise HTTPException(status_code=403, detail="Only doctors or super admins can run predictions")
+
+    raw = await file.read()
+    # Try DICOM first if .dcm
+    try:
+        if file.filename.lower().endswith('.dcm'):
+            try:
+                import pydicom
+            except Exception:
+                raise HTTPException(status_code=415, detail="DICOM not supported on server (install pydicom)")
+            ds = pydicom.dcmread(io.BytesIO(raw))
+            image_np = ds.pixel_array.astype(np.float32)
+        else:
+            img = Image.open(io.BytesIO(raw)).convert('RGB')
+            image_np = np.array(img)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid image file")
+
+    result = run_inference(image_np)
+    return result
 
 @app.post("/api/diagnose")
 async def create_diagnosis(
@@ -119,10 +276,8 @@ async def create_diagnosis(
     Create a new diagnosis request
     """
     try:
-        # Get user profile
-        profile = await get_user_profile(user['id'])
-        if not profile:
-            raise HTTPException(status_code=404, detail="User profile not found")
+        # Ensure account is active (blocks unapproved doctors)
+        await require_active_account(user['id'])
 
         # Create diagnosis record
         diagnosis_data = {
@@ -159,6 +314,7 @@ async def get_diagnoses(user: dict = Depends(get_current_user)):
     Get all diagnoses for the current user
     """
     try:
+        await require_active_account(user['id'])
         response = supabase.table("diagnoses").select("*").eq("user_id", user['id']).order("created_at", desc=True).execute()
         
         return {
@@ -175,6 +331,7 @@ async def get_diagnosis(diagnosis_id: str, user: dict = Depends(get_current_user
     Get a specific diagnosis by ID
     """
     try:
+        await require_active_account(user['id'])
         response = supabase.table("diagnoses").select("*").eq("id", diagnosis_id).eq("user_id", user['id']).execute()
         
         if not response.data:
@@ -195,6 +352,7 @@ async def update_diagnosis_status(
     Update diagnosis status
     """
     try:
+        await require_active_account(user['id'])
         # Verify ownership
         response = supabase.table("diagnoses").select("*").eq("id", diagnosis_id).eq("user_id", user['id']).execute()
         
@@ -308,6 +466,7 @@ async def create_user(
     role: str = Form(...),
     first_name: str = Form(...),
     last_name: str = Form(...),
+    username: str = Form(None),
     user: dict = Depends(get_current_user)
 ):
     """
@@ -319,8 +478,47 @@ async def create_user(
         if not profile or profile.get("role") != "super_admin":
             raise HTTPException(status_code=403, detail="Only super admins can create users")
         
-        # Check if user already exists in profiles table
+        # Check if user already exists in auth or profiles
+        # 1) Check Auth users (if exists we'll just (upsert) the profile instead of failing)
+        try:
+            auth_users = supabase.auth.admin.list_users()
+            existing_auth_user = None
+            if hasattr(auth_users, "users"):
+                for au in auth_users.users:
+                    if (au.email or "").lower() == email.lower():
+                        existing_auth_user = au
+                        break
+        except Exception:
+            existing_auth_user = None
+
+        # 2) Check existing profile by email
         existing_profile = supabase.table("profiles").select("*").eq("email", email).execute()
+
+        if existing_auth_user:
+            # Ensure/refresh profile and role for existing auth user
+            profile_data = {
+                "id": existing_auth_user.id,
+                "email": email,
+                "role": role,
+                "first_name": first_name,
+                "last_name": last_name,
+                "username": username,
+                # Doctors require approval; others auto-approved
+                "approved": (role != "doctor"),
+                "updated_at": datetime.now().isoformat()
+            }
+            # upsert profile
+            try:
+                profile_resp = supabase.table("profiles").upsert(profile_data, on_conflict="id").execute()
+            except Exception:
+                # Fallback to update if upsert not available in current client
+                profile_resp = supabase.table("profiles").update(profile_data).eq("id", existing_auth_user.id).execute()
+
+            return {
+                "message": "Existing user found. Profile was created/updated successfully.",
+                "user": (profile_resp.data[0] if profile_resp and getattr(profile_resp, "data", None) else profile_data)
+            }
+
         if existing_profile.data:
             raise HTTPException(status_code=400, detail="User with this email already exists")
         
@@ -332,7 +530,8 @@ async def create_user(
             "user_metadata": {
                 "role": role,
                 "first_name": first_name,
-                "last_name": last_name
+                "last_name": last_name,
+                "username": username
             }
         })
         
@@ -344,11 +543,17 @@ async def create_user(
                 "role": role,
                 "first_name": first_name,
                 "last_name": last_name,
+                "username": username,
+                # Doctors require approval; others auto-approved
+                "approved": (role != "doctor"),
                 "created_at": datetime.now().isoformat(),
                 "updated_at": datetime.now().isoformat()
             }
-            
-            profile_response = supabase.table("profiles").insert(profile_data).execute()
+            # Prefer upsert to avoid rare race conditions
+            try:
+                profile_response = supabase.table("profiles").upsert(profile_data, on_conflict="id").execute()
+            except Exception:
+                profile_response = supabase.table("profiles").insert(profile_data).execute()
             
             if profile_response.data:
                 return {
@@ -391,8 +596,23 @@ async def update_user_role(
         if not profile or profile.get("role") != "super_admin":
             raise HTTPException(status_code=403, detail="Only super admins can update user roles")
         
-        # Update user role
-        response = supabase.table("profiles").update({"role": role}).eq("id", user_id).execute()
+        # Fetch target user's current role
+        target_resp = supabase.table("profiles").select("*").eq("id", user_id).execute()
+        if not target_resp.data:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        target = target_resp.data[0]
+
+        # Prevent changing super admin role to anything else
+        if target.get("role") == "super_admin" and role != "super_admin":
+            raise HTTPException(status_code=403, detail="Cannot change super admin role")
+
+        # Update user role and adjust approval automatically
+        update_payload = {"role": role}
+        if target.get("role") != role:
+            update_payload["approved"] = (role != "doctor")
+
+        response = supabase.table("profiles").update(update_payload).eq("id", user_id).execute()
         
         if response.data:
             return {"message": "User role updated successfully", "user": response.data[0]}
@@ -401,6 +621,33 @@ async def update_user_role(
             
     except Exception as e:
         print(f"Error updating user role: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/admin/users/{user_id}/approve")
+async def approve_user(
+    user_id: str,
+    approved: bool = Form(...),
+    user: dict = Depends(get_current_user)
+):
+    """
+    Approve or revoke approval for a user (Super Admin only)
+    """
+    try:
+        profile = await get_user_profile(user['id'])
+        if not profile or profile.get("role") != "super_admin":
+            raise HTTPException(status_code=403, detail="Only super admins can approve users")
+
+        resp = supabase.table("profiles").update({
+            "approved": approved,
+            "updated_at": datetime.now().isoformat()
+        }).eq("id", user_id).execute()
+
+        if not resp.data:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        return {"message": "Approval updated", "user": resp.data[0]}
+    except Exception as e:
+        print(f"Error approving user: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/admin/users/{user_id}")
@@ -417,6 +664,13 @@ async def delete_user(
         if not profile or profile.get("role") != "super_admin":
             raise HTTPException(status_code=403, detail="Only super admins can delete users")
         
+        # Block deleting super admin accounts
+        target_resp = supabase.table("profiles").select("role").eq("id", user_id).execute()
+        if not target_resp.data:
+            raise HTTPException(status_code=404, detail="User not found")
+        if target_resp.data[0].get("role") == "super_admin":
+            raise HTTPException(status_code=403, detail="Cannot delete super admin")
+
         # Delete user from Supabase Auth
         auth_response = supabase.auth.admin.delete_user(user_id)
         
@@ -425,6 +679,24 @@ async def delete_user(
             
     except Exception as e:
         print(f"Error deleting user: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# List users (Admin Only)
+@app.get("/api/admin/users")
+async def list_users(user: dict = Depends(get_current_user)):
+    """
+    List all users (profiles). Super Admin only.
+    """
+    try:
+        # Check admin
+        profile = await get_user_profile(user['id'])
+        if not profile or profile.get("role") != "super_admin":
+            raise HTTPException(status_code=403, detail="Only super admins can view all users")
+
+        resp = supabase.table("profiles").select("*").order("created_at", desc=True).execute()
+        return resp.data or []
+    except Exception as e:
+        print(f"Error listing users: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

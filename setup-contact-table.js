@@ -184,3 +184,4 @@ CREATE POLICY "Super admins can update contact messages" ON contact_messages
 }
 
 setupContactTable()
+

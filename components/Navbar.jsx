@@ -16,18 +16,33 @@ const Navbar = () => {
 
   const checkUser = async () => {
     const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
-      setUser(user);
-      
-      // Get user profile
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .single();
-      
-      setProfile(profile);
+    if (!user) return;
+
+    setUser(user);
+
+    // Get user profile
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', user.id)
+      .single();
+
+    // If doctor is not approved, immediately sign them out and redirect to auth with message
+    if (profile?.role === 'doctor' && profile?.approved === false) {
+      await supabase.auth.signOut();
+      setUser(null);
+      setProfile(null);
+      router.push('/auth?pending=1');
+      return;
     }
+
+    // Prefer username from profile; fallback to auth metadata; then email
+    const mergedProfile = {
+      ...profile,
+      username: profile?.username || user.user_metadata?.username || null,
+      email: profile?.email || user.email,
+    };
+    setProfile(mergedProfile);
   };
 
   const handleSignOut = async () => {
@@ -54,7 +69,7 @@ const Navbar = () => {
           {user ? (
             <>
               <span className="text-sm text-gray-600">
-                {profile?.email} ({profile?.role})
+                {profile?.username || user?.user_metadata?.username || profile?.email} ({profile?.role})
               </span>
               <Link 
                 href="/dashboard"

@@ -18,7 +18,8 @@ export default function AdminDashboard() {
     password: '',
     role: USER_ROLES.USER,
     first_name: '',
-    last_name: ''
+    last_name: '',
+    username: ''
   })
   const router = useRouter()
 
@@ -54,13 +55,27 @@ export default function AdminDashboard() {
 
   const fetchUsers = async () => {
     try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .order('created_at', { ascending: false })
+      // Prefer backend list endpoint (uses service role and bypasses RLS)
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) throw new Error('No active session')
 
-      if (error) throw error
-      setUsers(data || [])
+      const resp = await fetch('http://localhost:8000/api/admin/users', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      })
+
+      if (!resp.ok) {
+        // Fallback to direct query if backend not available
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('*')
+          .order('created_at', { ascending: false })
+        if (error) throw error
+        setUsers(data || [])
+        return
+      }
+
+      const data = await resp.json()
+      setUsers(Array.isArray(data) ? data : [])
     } catch (error) {
       console.error('Error fetching users:', error)
     }
@@ -84,6 +99,7 @@ export default function AdminDashboard() {
       formData.append('role', newUserData.role)
       formData.append('first_name', newUserData.first_name)
       formData.append('last_name', newUserData.last_name)
+      if (newUserData.username) formData.append('username', newUserData.username)
 
       const response = await fetch('http://localhost:8000/api/admin/users', {
         method: 'POST',
@@ -107,7 +123,8 @@ export default function AdminDashboard() {
         password: '',
         role: USER_ROLES.USER,
         first_name: '',
-        last_name: ''
+        last_name: '',
+        username: ''
       })
       fetchUsers()
     } catch (error) {
@@ -406,6 +423,9 @@ export default function AdminDashboard() {
                     Role
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Status
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Created
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -421,12 +441,11 @@ export default function AdminDashboard() {
                         <div className="text-lg mr-3">{getRoleIcon(user.role)}</div>
                         <div>
                           <div className="text-sm font-medium text-gray-900">
-                            {user.first_name && user.last_name 
+                            {user.username || (user.first_name && user.last_name 
                               ? `${user.first_name} ${user.last_name}`
-                              : user.email
-                            }
+                              : user.email)}
                           </div>
-                          <div className="text-sm text-gray-500">{user.email}</div>
+                          <div className="text-sm text-gray-500">{user.username ? user.email : user.email}</div>
                         </div>
                       </div>
                     </td>
@@ -435,15 +454,37 @@ export default function AdminDashboard() {
                         {user.role}
                       </span>
                     </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      {user.role === USER_ROLES.DOCTOR ? (
+                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${user.approved ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
+                          {user.approved ? 'Approved' : 'Pending'}
+                        </span>
+                      ) : (
+                        <span className="text-gray-500 text-sm">-</span>
+                      )}
+                    </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {new Date(user.created_at).toLocaleDateString()}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                       <div className="flex space-x-2">
+                        {(() => { /* derive disabling rules */ })()}
                         <select
                           value={user.role}
                           onChange={(e) => handleUpdateUserRole(user.id, e.target.value)}
-                          disabled={actionLoading}
+                          disabled={(() => {
+                            const superAdminCount = users.filter(u => u.role === USER_ROLES.SUPER_ADMIN).length;
+                            const isTargetSuperAdmin = user.role === USER_ROLES.SUPER_ADMIN;
+                            const isSelf = user.id === profile?.id;
+                            // Disable if currently loading, or
+                            //  - the target is a super admin and either
+                            //    a) there is only one super admin (protect last admin), or
+                            //    b) the target is the currently logged-in super admin (no self-downgrade)
+                            return (
+                              actionLoading ||
+                              (isTargetSuperAdmin && (superAdminCount === 1 || isSelf))
+                            );
+                          })()}
                           className="text-sm border border-gray-300 rounded px-2 py-1 text-gray-900"
                         >
                           <option value={USER_ROLES.USER}>User</option>
@@ -452,11 +493,44 @@ export default function AdminDashboard() {
                         </select>
                         <button
                           onClick={() => handleDeleteUser(user.id)}
-                          disabled={actionLoading || user.id === profile?.id}
+                          disabled={(() => {
+                            const superAdminCount = users.filter(u => u.role === USER_ROLES.SUPER_ADMIN).length;
+                            const isTargetSuperAdmin = user.role === USER_ROLES.SUPER_ADMIN;
+                            const isSelf = user.id === profile?.id;
+                            // Disable delete if loading, or deleting self, or deleting the only super admin
+                            return actionLoading || isSelf || (isTargetSuperAdmin && superAdminCount === 1);
+                          })()}
                           className="text-red-600 hover:text-red-900 disabled:opacity-50"
                         >
                           Delete
                         </button>
+                        {user.role === USER_ROLES.DOCTOR && (
+                          <button
+                            onClick={async () => {
+                              try {
+                                const { data: { session } } = await supabase.auth.getSession();
+                                if (!session) throw new Error('No active session');
+                                const fd = new FormData();
+                                fd.append('approved', String(!user.approved));
+                                const resp = await fetch(`http://localhost:8000/api/admin/users/${user.id}/approve`, {
+                                  method: 'PUT',
+                                  headers: { Authorization: `Bearer ${session.access_token}` },
+                                  body: fd,
+                                });
+                                if (!resp.ok) {
+                                  const er = await resp.json();
+                                  throw new Error(er.detail || 'Failed to update approval');
+                                }
+                                fetchUsers();
+                              } catch (err) {
+                                alert(err.message);
+                              }
+                            }}
+                            className={`px-2 py-1 rounded ${user.approved ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'}`}
+                          >
+                            {user.approved ? 'Revoke' : 'Approve'}
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
