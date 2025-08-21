@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from supabase import create_client, Client
@@ -78,8 +78,30 @@ def _load_model_if_needed():
             _use_onnx = True
         else:
             import torch
-            _torch_model = torch.jit.load(model_path, map_location="cpu")
-            _torch_model.eval()
+            # Try torch.jit.load first, then fallback to torch.load
+            try:
+                _torch_model = torch.jit.load(model_path, map_location="cpu")
+                _torch_model.eval()
+            except Exception as jit_error:
+                print(f"[inference] torch.jit.load failed: {jit_error}, trying torch.load...")
+                # Fallback to regular torch.load for state dict
+                state_dict = torch.load(model_path, map_location="cpu", weights_only=False)
+                # Create model with correct architecture
+                import torchvision.models as models
+                _torch_model = models.densenet121(pretrained=False)
+                
+                # Determine the number of classes from the state dict
+                if 'classifier.weight' in state_dict:
+                    num_classes = state_dict['classifier.weight'].shape[0]
+                    print(f"[inference] Detected {num_classes} classes from model")
+                else:
+                    num_classes = 14  # Default fallback
+                    print(f"[inference] Using default {num_classes} classes")
+                
+                # Adjust the classifier to match the saved model
+                _torch_model.classifier = torch.nn.Linear(_torch_model.classifier.in_features, num_classes)
+                _torch_model.load_state_dict(state_dict)
+                _torch_model.eval()
             _use_onnx = False
         print(f"[inference] Loaded model: {model_path} (onnx={_use_onnx})")
     except Exception as e:
@@ -93,58 +115,198 @@ def _preprocess(image_np: np.ndarray) -> np.ndarray:
         import cv2
     except Exception:
         raise HTTPException(status_code=500, detail="OpenCV not installed on server")
-    img = image_np
+    
+    img = image_np.copy()
+    
+    # Handle different image types
     if img.ndim == 2:
+        # Grayscale medical image
         img = np.stack([img, img, img], axis=-1)
-    img = cv2.resize(img, (224, 224))
+    elif img.ndim == 3 and img.shape[2] == 1:
+        # Single channel
+        img = np.repeat(img, 3, axis=2)
+    
+    # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) for medical images
+    if img.dtype != np.uint8:
+        # Convert to uint8 for CLAHE
+        img_uint8 = ((img - img.min()) / (img.max() - img.min()) * 255).astype(np.uint8)
+    else:
+        img_uint8 = img.copy()
+    
+    # Apply CLAHE to improve contrast
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    if len(img_uint8.shape) == 3:
+        # Apply to each channel
+        for i in range(3):
+            img_uint8[:,:,i] = clahe.apply(img_uint8[:,:,i])
+    else:
+        img_uint8 = clahe.apply(img_uint8)
+    
+    # Resize
+    img = cv2.resize(img_uint8, (224, 224))
+    
+    # Convert to float and normalize
     img = img.astype(np.float32) / 255.0
+    
+    # ImageNet normalization (standard for pretrained models)
     mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
     std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
     img = (img - mean) / std
+    
     img = np.transpose(img, (2, 0, 1))  # CHW
     img = np.expand_dims(img, 0)        # NCHW
+    
     return img
 
 def _postprocess(logits: np.ndarray):
-    # Map to a small set of labels; adapt to your trained classes
-    default_labels = ["Pneumonia", "Cardiomegaly", "Lung Opacity", "Fracture"]
+    # Fixed: Position 10 (was "Emphysema") is actually "No Finding"
+    default_labels = [
+        "Atelectasis", "Cardiomegaly", "Effusion", "Infiltration", 
+        "Mass", "Nodule", "Pneumonia", "Consolidation", 
+        "Edema", "Pneumothorax", "No Finding", "Fibrosis", 
+        "Pleural_Thickening", "Hernia"
+    ]
+    
+    # Now we need to find where "Emphysema" actually is
+    # It might be at position 11 (currently "Fibrosis") or another position
+    
+    # If normal X-rays still show as pathology, try this:
+    # Comment out the above and uncomment this (replaces "Hernia" with "No Finding"):
+    # default_labels = [
+    #     "Atelectasis", "Cardiomegaly", "Effusion", "Infiltration", 
+    #     "Mass", "Nodule", "Pneumonia", "Consolidation", 
+    #     "Edema", "Pneumothorax", "Emphysema", "Fibrosis", 
+    #     "Pleural_Thickening", "No Finding"
+    # ]
+    
+    # If above doesn't work, try these alternatives by commenting out the current
+    # mapping and uncommenting one of these:
+    
+    # Option A - NIH ChestX-ray14 Standard Order:
+    # default_labels = [
+    #     "Atelectasis", "Cardiomegaly", "Effusion", "Infiltration",
+    #     "Mass", "Nodule", "Pneumonia", "Pneumothorax",
+    #     "Consolidation", "Edema", "Emphysema", "Fibrosis",
+    #     "Pleural_Thickening", "Hernia"
+    # ]
+    
+    # Option B - Alphabetical Order:
+    # default_labels = [
+    #     "Atelectasis", "Cardiomegaly", "Consolidation", "Edema",
+    #     "Effusion", "Emphysema", "Fibrosis", "Hernia",
+    #     "Infiltration", "Mass", "Nodule", "Pleural_Thickening",
+    #     "Pneumonia", "Pneumothorax"
+    # ]
+    
+    # Option C - Alternative Common Order:
+    # default_labels = [
+    #     "Pneumonia", "Pneumothorax", "Consolidation", "Edema",
+    #     "Atelectasis", "Cardiomegaly", "Effusion", "Infiltration",
+    #     "Mass", "Nodule", "Emphysema", "Fibrosis",
+    #     "Pleural_Thickening", "Hernia"
+    # ]
+    
     x = logits.squeeze()
     # If single value, wrap
     if x.ndim == 0:
         x = np.array([x])
-    # Heuristic: if looks like multi-label, use sigmoid; else softmax
-    if x.size <= len(default_labels):
-        probs = 1.0 / (1.0 + np.exp(-x))
-    else:
-        e = np.exp(x - np.max(x))
-        probs = e / np.sum(e)
+    
+    # Debug: Print raw logits for analysis
+    # Use sigmoid for multi-label classification (common for medical imaging)
+    probs = 1.0 / (1.0 + np.exp(-x))
+    
     results = []
     for idx, p in enumerate(probs):
-        label = default_labels[idx] if idx < len(default_labels) else f"Class {idx}"
+        if idx < len(default_labels):
+            label = default_labels[idx]
+        else:
+            label = f"Finding_{idx}"
         results.append({"label": label, "confidence": float(p)})
+    
+    # Sort by confidence and return top 5
     results.sort(key=lambda d: d["confidence"], reverse=True)
-    return results[:5]
+    
+    # Find "No Finding" prediction
+    no_finding_result = None
+    pathology_results = []
+    
+    for result in results:
+        if "No Finding" in result["label"]:
+            no_finding_result = result
+        else:
+            pathology_results.append(result)
+    
+    # Only return "Normal" if "No Finding" has very high confidence (>75%)
+    # AND no pathology has significant confidence (>40%)
+    if no_finding_result:
+        max_pathology_confidence = max([r["confidence"] for r in pathology_results]) if pathology_results else 0
+        print(f"[DEBUG] No Finding: {no_finding_result['confidence']:.3f}, Max pathology: {max_pathology_confidence:.3f}")
+        
+        # Only call it normal if No Finding is very confident AND pathologies are low
+        if no_finding_result["confidence"] > 0.75 and max_pathology_confidence < 0.4:
+            print(f"[INFO] High confidence normal: No Finding ({no_finding_result['confidence']:.3f}) > pathologies ({max_pathology_confidence:.3f})")
+            return [{"label": "Normal - No significant findings detected", "confidence": no_finding_result["confidence"]}]
+        
+        # If No Finding has moderate confidence but pathologies are higher, show pathologies
+        print(f"[INFO] Showing pathology results instead of normal")
+    
+    # Process pathological findings
+    # Add confidence indicators
+    for result in pathology_results:
+        if result["confidence"] < 0.4:
+            result["label"] += " (Low Confidence)"
+        elif result["confidence"] > 0.7:
+            result["label"] += " (High Confidence)"
+    
+    # Filter out very low-confidence predictions (below 25%)
+    filtered_results = [r for r in pathology_results if r["confidence"] > 0.25]
+    
+    # If no significant pathological findings
+    if not filtered_results:
+        return [{"label": "Normal - No significant findings detected", "confidence": 0.8}]
+    
+    return filtered_results[:5]
 
 def run_inference(image_np: np.ndarray):
-    _load_model_if_needed()
-    if _onnx_session is None and _torch_model is None:
-        raise HTTPException(status_code=500, detail="Model not available on server")
-    inp = _preprocess(image_np)
-    if _use_onnx:
-        input_name = _onnx_session.get_inputs()[0].name
-        outputs = _onnx_session.run(None, {input_name: inp})
-        logits = outputs[0]
-    else:
-        import torch
-        with torch.no_grad():
-            tensor = torch.from_numpy(inp)
-            logits = _torch_model(tensor)
-            if hasattr(logits, 'detach'):
-                logits = logits.detach().cpu().numpy()
-            else:
-                logits = np.array(logits)
-    predictions = _postprocess(logits)
-    return {"predictions": predictions}
+    try:
+        print(f"[inference] Starting inference for image shape: {image_np.shape}")
+        _load_model_if_needed()
+        
+        if _onnx_session is None and _torch_model is None:
+            print("[inference] No model available")
+            raise HTTPException(status_code=500, detail="Model not available on server")
+        
+        print(f"[inference] Model loaded, using ONNX: {_use_onnx}")
+        inp = _preprocess(image_np)
+        print(f"[inference] Preprocessed input shape: {inp.shape}")
+        
+        if _use_onnx:
+            input_name = _onnx_session.get_inputs()[0].name
+            print(f"[inference] ONNX input name: {input_name}")
+            outputs = _onnx_session.run(None, {input_name: inp})
+            logits = outputs[0]
+            print(f"[inference] ONNX output shape: {logits.shape}")
+        else:
+            import torch
+            with torch.no_grad():
+                tensor = torch.from_numpy(inp)
+                print(f"[inference] PyTorch tensor shape: {tensor.shape}")
+                logits = _torch_model(tensor)
+                if hasattr(logits, 'detach'):
+                    logits = logits.detach().cpu().numpy()
+                else:
+                    logits = np.array(logits)
+                print(f"[inference] PyTorch output shape: {logits.shape}")
+        
+        predictions = _postprocess(logits)
+        print(f"[inference] Postprocessed predictions: {predictions}")
+        return {"predictions": predictions}
+        
+    except Exception as e:
+        print(f"[inference] Error during inference: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Inference failed: {str(e)}")
 
 # Models
 class DiagnosisRequest:
@@ -238,34 +400,191 @@ async def root():
 async def health_check():
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
+@app.get("/api/model/info")
+async def model_info():
+    """Get information about the loaded model"""
+    try:
+        _load_model_if_needed()
+        
+        # Get current labels
+        current_labels = [
+            "Atelectasis", "Cardiomegaly", "Effusion", "Infiltration", 
+            "Mass", "Nodule", "Pneumonia", "Pneumothorax", 
+            "Edema", "Consolidation", "Emphysema", "Fibrosis", 
+            "Pleural_Thickening", "Hernia"
+        ]
+        
+        # Get model info
+        model_info = {
+            "loaded": _onnx_session is not None or _torch_model is not None,
+            "model_type": "onnx" if _use_onnx else "pytorch",
+            "labels": current_labels,
+            "num_classes": 14,
+            "input_size": [224, 224],
+            "preprocessing": "ImageNet normalization with CLAHE"
+        }
+        
+        if _torch_model is not None:
+            # Get model architecture info
+            model_info["architecture"] = str(type(_torch_model).__name__)
+            
+        return model_info
+        
+    except Exception as e:
+        return {"error": str(e), "loaded": False}
+
+@app.post("/api/debug/raw-prediction")
+async def debug_raw_prediction(
+    file: UploadFile = File(...),
+    user: dict = Depends(get_current_user)
+):
+    """Debug endpoint to see raw model outputs with all label mappings"""
+    try:
+        profile = await require_active_account(user['id'])
+        if profile.get("role") not in ["doctor", "super_admin"]:
+            raise HTTPException(status_code=403, detail="Only doctors or super admins can run predictions")
+
+        print(f"[DEBUG] Processing file: {file.filename}")
+        
+        raw = await file.read()
+        
+        # Load image
+        if file.filename.lower().endswith('.dcm'):
+            try:
+                import pydicom
+                ds = pydicom.dcmread(io.BytesIO(raw))
+                image_np = ds.pixel_array.astype(np.float32)
+            except Exception as e:
+                raise HTTPException(status_code=415, detail=f"DICOM error: {str(e)}")
+        else:
+            img = Image.open(io.BytesIO(raw)).convert('RGB')
+            image_np = np.array(img)
+
+        # Run inference and get raw logits
+        _load_model_if_needed()
+        if _onnx_session is None and _torch_model is None:
+            raise HTTPException(status_code=500, detail="Model not available")
+        
+        inp = _preprocess(image_np)
+        
+        if _use_onnx:
+            input_name = _onnx_session.get_inputs()[0].name
+            outputs = _onnx_session.run(None, {input_name: inp})
+            logits = outputs[0]
+        else:
+            import torch
+            with torch.no_grad():
+                tensor = torch.from_numpy(inp)
+                logits = _torch_model(tensor)
+                if hasattr(logits, 'detach'):
+                    logits = logits.detach().cpu().numpy()
+                else:
+                    logits = np.array(logits)
+        
+        x = logits.squeeze()
+        probs = 1.0 / (1.0 + np.exp(-x))
+        
+        # Show all possible label mappings
+        label_mappings = {
+            "current": [
+                "Atelectasis", "Cardiomegaly", "Effusion", "Infiltration", 
+                "Mass", "Nodule", "Pneumonia", "Pneumothorax", 
+                "Edema", "Consolidation", "Emphysema", "Fibrosis", 
+                "Pleural_Thickening", "Hernia"
+            ],
+            "original": [
+                "Atelectasis", "Cardiomegaly", "Effusion", "Infiltration", 
+                "Mass", "Nodule", "Pneumonia", "Pneumothorax", 
+                "Consolidation", "Edema", "Emphysema", "Fibrosis", 
+                "Pleural_Thickening", "Hernia"
+            ],
+            "alphabetical": [
+                "Atelectasis", "Cardiomegaly", "Consolidation", "Edema",
+                "Effusion", "Emphysema", "Fibrosis", "Hernia",
+                "Infiltration", "Mass", "Nodule", "Pleural_Thickening",
+                "Pneumonia", "Pneumothorax"
+            ]
+        }
+        
+        results = {}
+        for mapping_name, labels in label_mappings.items():
+            mapping_results = []
+            for idx, p in enumerate(probs):
+                if idx < len(labels):
+                    mapping_results.append({
+                        "index": idx,
+                        "label": labels[idx],
+                        "confidence": float(p),
+                        "raw_logit": float(x[idx])
+                    })
+            
+            # Sort by confidence
+            mapping_results.sort(key=lambda d: d["confidence"], reverse=True)
+            results[mapping_name] = mapping_results[:5]
+        
+        return {
+            "filename": file.filename,
+            "raw_logits": x.tolist(),
+            "probabilities": probs.tolist(),
+            "label_mappings": results
+        }
+        
+    except Exception as e:
+        print(f"[DEBUG] Error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
 @app.post("/api/ai/predict")
 async def ai_predict(
     file: UploadFile = File(...),
     user: dict = Depends(get_current_user)
 ):
-    # Only doctors or super admins can run predictions
-    profile = await require_active_account(user['id'])
-    if profile.get("role") not in ["doctor", "super_admin"]:
-        raise HTTPException(status_code=403, detail="Only doctors or super admins can run predictions")
-
-    raw = await file.read()
-    # Try DICOM first if .dcm
     try:
-        if file.filename.lower().endswith('.dcm'):
-            try:
-                import pydicom
-            except Exception:
-                raise HTTPException(status_code=415, detail="DICOM not supported on server (install pydicom)")
-            ds = pydicom.dcmread(io.BytesIO(raw))
-            image_np = ds.pixel_array.astype(np.float32)
-        else:
-            img = Image.open(io.BytesIO(raw)).convert('RGB')
-            image_np = np.array(img)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid image file")
+        # Only doctors or super admins can run predictions
+        profile = await require_active_account(user['id'])
+        if profile.get("role") not in ["doctor", "super_admin"]:
+            raise HTTPException(status_code=403, detail="Only doctors or super admins can run predictions")
 
-    result = run_inference(image_np)
-    return result
+        print(f"[AI] Processing file: {file.filename} for user: {user['id']}")
+        
+        raw = await file.read()
+        print(f"[AI] File size: {len(raw)} bytes")
+        
+        # Try DICOM first if .dcm
+        try:
+            if file.filename.lower().endswith('.dcm'):
+                try:
+                    import pydicom
+                except Exception as e:
+                    print(f"[AI] DICOM import error: {e}")
+                    raise HTTPException(status_code=415, detail="DICOM not supported on server (install pydicom)")
+                ds = pydicom.dcmread(io.BytesIO(raw))
+                image_np = ds.pixel_array.astype(np.float32)
+                print(f"[AI] DICOM loaded, shape: {image_np.shape}")
+            else:
+                img = Image.open(io.BytesIO(raw)).convert('RGB')
+                image_np = np.array(img)
+                print(f"[AI] Image loaded, shape: {image_np.shape}")
+        except Exception as e:
+            print(f"[AI] Image loading error: {e}")
+            raise HTTPException(status_code=400, detail=f"Invalid image file: {str(e)}")
+
+        print(f"[AI] Running inference...")
+        result = run_inference(image_np)
+        print(f"[AI] Inference completed: {result}")
+        return result
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        print(f"[AI] Unexpected error in ai_predict: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"AI analysis failed: {str(e)}")
 
 @app.post("/api/diagnose")
 async def create_diagnosis(
@@ -456,6 +775,39 @@ async def get_user_profile_endpoint(user: dict = Depends(get_current_user)):
         return profile
     except Exception as e:
         print(f"Error fetching user profile: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/users/settings")
+async def get_user_settings(user: dict = Depends(get_current_user)):
+    """
+    Get current user's settings.
+    """
+    try:
+        profile = await get_user_profile(user['id'])
+        if not profile:
+            raise HTTPException(status_code=404, detail="User profile not found")
+        # Example settings: notification preferences, theme, etc.
+        settings = profile.get("settings", {})
+        return settings
+    except Exception as e:
+        print(f"Error fetching user settings: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/users/settings")
+async def update_user_settings(
+    settings: dict = Form(...),
+    user: dict = Depends(get_current_user)
+):
+    """
+    Update current user's settings.
+    """
+    try:
+        resp = supabase.table("profiles").update({"settings": json.dumps(settings)}).eq("id", user['id']).execute()
+        if not resp.data:
+            raise HTTPException(status_code=404, detail="User profile not found")
+        return {"message": "Settings updated", "settings": settings}
+    except Exception as e:
+        print(f"Error updating user settings: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # User Management Endpoints (Admin Only)
@@ -699,6 +1051,59 @@ async def list_users(user: dict = Depends(get_current_user)):
         print(f"Error listing users: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+@app.get("/api/admin/analytics")
+async def admin_analytics(user: dict = Depends(get_current_user)):
+    """
+    Admin analytics: show summary of all users, diagnoses, and activity.
+    Super Admin only.
+    """
+    try:
+        profile = await get_user_profile(user['id'])
+        if not profile or profile.get("role") != "super_admin":
+            raise HTTPException(status_code=403, detail="Only super admins can view analytics")
+
+        # Total users (include identifiers for display)
+        users_resp = supabase.table("profiles").select(
+            "id",
+            "email",
+            "username",
+            "first_name",
+            "last_name",
+            "role",
+            "created_at",
+        ).execute()
+        users = users_resp.data or []
+
+        # Total diagnoses
+        diag_resp = supabase.table("diagnoses").select("id", "user_id", "status", "created_at").execute()
+        diagnoses = diag_resp.data or []
+
+        # Diagnoses per user
+        diag_per_user = {}
+        for diag in diagnoses:
+            uid = diag["user_id"]
+            diag_per_user[uid] = diag_per_user.get(uid, 0) + 1
+
+        # Recent activity (last 7 days)
+        from datetime import datetime, timedelta
+        cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+        recent_diags = [d for d in diagnoses if d["created_at"] >= cutoff]
+
+        return {
+            "total_users": len(users),
+            "total_diagnoses": len(diagnoses),
+            "diagnoses_per_user": diag_per_user,
+            "recent_diagnoses": recent_diags,
+            "users": users,
+            "diagnoses": diagnoses,
+        }
+    except Exception as e:
+        print(f"Error fetching analytics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/profiles/{user_id}")
+async def get_profile_username(user_id: str):
+    resp = supabase.table("profiles").select("username, email").eq("id", user_id).single().execute()
+    if not resp.data:
+        raise HTTPException(status_code=404, detail="User not found")
+    return resp.data

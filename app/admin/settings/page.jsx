@@ -2,104 +2,82 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { supabase } from '../../lib/supabase'
+import { supabase } from '../../../lib/supabase'
 
-export default function SettingsPage() {
+export default function AdminSettingsPage() {
   const router = useRouter()
-  const [user, setUser] = useState(null)
-  const [profile, setProfile] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
   const [email, setEmail] = useState('')
   const [busy, setBusy] = useState(false)
-  const [message, setMessage] = useState('')
-  const [error, setError] = useState('')
+  const [userId, setUserId] = useState('')
 
   useEffect(() => {
     (async () => {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) {
-        router.push('/auth')
-        return
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) { router.push('/auth'); return }
+        setEmail(user.email)
+        setUserId(user.id)
+
+        // Only super admins can access
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', user.id)
+          .single()
+        if (!profile || profile.role !== 'super_admin') { router.push('/dashboard'); return }
+      } catch (e) {
+        setError(e.message || 'Failed to load')
+      } finally {
+        setLoading(false)
       }
-      
-      setUser(user)
-      setEmail(user.email)
-      
-      // Get user profile to check role
-      const { data: profileData } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', user.id)
-        .single()
-      
-      setProfile(profileData)
     })()
   }, [router])
 
   async function sendPasswordReset() {
     if (!email) return
-    setBusy(true); setMessage(''); setError('')
+    setBusy(true); setError('')
     try {
       const origin = typeof window !== 'undefined' ? window.location.origin : process.env.NEXT_PUBLIC_SITE_URL
       const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${origin}/auth/reset` })
       if (error) throw error
-      setMessage('Password reset email sent.')
+      alert('Password reset email sent')
     } catch (e) {
       setError(e.message || 'Failed to send reset email')
-    } finally {
-      setBusy(false)
-    }
+    } finally { setBusy(false) }
   }
 
   async function signOutAll() {
-    setBusy(true); setMessage(''); setError('')
+    setBusy(true); setError('')
     try {
-      // Global sign-out (invalidates all refresh tokens). Some versions ignore scope.
       await supabase.auth.signOut({ scope: 'global' })
-      setMessage('Signed out from all devices.')
+      alert('Signed out from all devices')
     } catch (e) {
       setError(e.message || 'Failed to sign out globally')
-    } finally {
-      setBusy(false)
-    }
+    } finally { setBusy(false) }
   }
 
-  async function deleteAccount() {
-    if (!user) return
-    if (!confirm('Delete your account and all analyses? This cannot be undone.')) return
-    setBusy(true); setMessage(''); setError('')
-    try {
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) throw new Error('No active session')
-      const res = await fetch('/api/account/delete', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`
-        }
-      })
-      const body = await res.json()
-      if (!res.ok) throw new Error(body.error || 'Delete failed')
-      // After deletion, sign out locally and go to auth
-      await supabase.auth.signOut()
-      router.push('/auth')
-    } catch (e) {
-      setError(e.message || 'Failed to delete account')
-    } finally {
-      setBusy(false)
-    }
-  }
+
+  if (loading) return <div className="min-h-screen flex items-center justify-center">Loading...</div>
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
-        <h1 className="text-2xl font-bold text-gray-900 mb-4">Settings</h1>
+      <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-3">
+            <button onClick={() => router.push('/admin')} className="text-blue-600 hover:text-blue-700">← Back to Admin</button>
+            <h1 className="text-2xl font-bold text-gray-900">System Settings</h1>
+          </div>
+        </div>
+
+        {error && <div className="mb-4 p-3 rounded-md bg-red-50 text-red-700 text-sm border border-red-200">{error}</div>}
+
         <div className="bg-white shadow rounded-md p-4 space-y-6">
           <div>
-            <label className="block text-sm text-gray-600 mb-1">Email</label>
+            <label className="block text-sm text-gray-600 mb-1">Admin Email</label>
             <input value={email} readOnly className="w-full border rounded-md p-2 text-gray-900" />
           </div>
-
-          {message && <div className="text-sm text-green-700">{message}</div>}
-          {error && <div className="text-sm text-red-600">{error}</div>}
 
           <div className="border-t pt-4">
             <h2 className="text-sm font-semibold text-gray-900 mb-2">Account</h2>
@@ -109,26 +87,19 @@ export default function SettingsPage() {
             </div>
           </div>
 
+          {/* Same contact phone editor as user/doctor settings */}
           <div className="border-t pt-4">
             <h2 className="text-sm font-semibold text-gray-900 mb-2">Contact</h2>
-            <DoctorPhone />
+            <AdminPhoneEditor />
           </div>
 
-          {/* Hide delete account section for super admins */}
-          {profile?.role !== 'super_admin' && (
-            <div className="border-t pt-4">
-              <h2 className="text-sm font-semibold text-gray-900 mb-2">Danger zone</h2>
-              <p className="text-sm text-gray-600 mb-3">Delete your account and all associated analyses and profile data.</p>
-              <button onClick={deleteAccount} disabled={busy} className="px-3 py-2 bg-red-600 text-white rounded-md disabled:opacity-50">Delete account</button>
-            </div>
-          )}
         </div>
       </div>
     </div>
   )
 }
 
-function DoctorPhone() {
+function AdminPhoneEditor() {
   const [phone, setPhone] = useState('')
   const [saving, setSaving] = useState(false)
   const [status, setStatus] = useState('')
@@ -165,4 +136,5 @@ function DoctorPhone() {
     </div>
   )
 }
+
 

@@ -17,6 +17,31 @@ CREATE TABLE IF NOT EXISTS contact_messages (
     responded_by UUID REFERENCES auth.users(id)
 );
 
+-- User/Doctor direct messages table (for consultations)
+CREATE TABLE IF NOT EXISTS messages (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    from_user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+    to_user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+    content TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Enable RLS
+ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
+
+-- Policies: participants can read their own threads; only sender can insert; no deletes by default
+CREATE POLICY "Participants can view conversation" ON messages
+    FOR SELECT USING (
+      auth.uid() = from_user_id OR auth.uid() = to_user_id
+    );
+
+CREATE POLICY "Sender can insert message" ON messages
+    FOR INSERT WITH CHECK (
+      auth.uid() = from_user_id
+    );
+
+-- Optional: allow either participant to update (rare). Typically not needed; omit for safety.
+
 -- Create index for better performance
 CREATE INDEX IF NOT EXISTS idx_contact_messages_status ON contact_messages(status);
 CREATE INDEX IF NOT EXISTS idx_contact_messages_created_at ON contact_messages(created_at);

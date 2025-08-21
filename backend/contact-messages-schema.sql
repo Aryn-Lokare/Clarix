@@ -42,3 +42,24 @@ CREATE INDEX IF NOT EXISTS idx_contact_messages_inquiry_type ON contact_messages
 CREATE TRIGGER update_contact_messages_updated_at 
     BEFORE UPDATE ON contact_messages
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Direct messages table (users <-> doctors)
+CREATE TABLE IF NOT EXISTS messages (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    from_user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+    to_user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+    content TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Participants can view conversation" ON messages
+    FOR SELECT USING (
+      auth.uid() = from_user_id OR auth.uid() = to_user_id
+    );
+
+CREATE POLICY "Sender can insert message" ON messages
+    FOR INSERT WITH CHECK (
+      auth.uid() = from_user_id
+    );

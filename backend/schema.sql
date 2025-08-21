@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS patient_records (
     patient_id_hash TEXT NOT NULL, -- Anonymized patient identifier
     age_group TEXT CHECK (age_group IN ('child', 'adult', 'elderly')),
     gender TEXT CHECK (gender IN ('male', 'female', 'other')),
+    user_id UUID,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -65,10 +66,8 @@ CREATE POLICY "Users can update own profile" ON profiles
 
 CREATE POLICY "Super admins can view all profiles" ON profiles
     FOR ALL USING (
-        EXISTS (
-            SELECT 1 FROM profiles 
-            WHERE id = auth.uid() AND role = 'super_admin'
-        )
+        auth.uid() = id OR
+        current_setting('request.jwt.claims', true)::json->>'role' = 'super_admin'
     );
 
 -- Diagnoses policies
@@ -83,37 +82,22 @@ CREATE POLICY "Users can update own diagnoses" ON diagnoses
 
 CREATE POLICY "Doctors can view all diagnoses" ON diagnoses
     FOR SELECT USING (
-        EXISTS (
-            SELECT 1 FROM profiles 
-            WHERE id = auth.uid() AND role IN ('doctor', 'super_admin')
-        )
+        current_setting('request.jwt.claims', true)::json->>'role' IN ('doctor', 'super_admin')
     );
 
 -- Patient records policies
 CREATE POLICY "Users can view own patient records" ON patient_records
-    FOR SELECT USING (
-        EXISTS (
-            SELECT 1 FROM diagnoses 
-            WHERE diagnoses.id = patient_records.diagnosis_id 
-            AND diagnoses.user_id = auth.uid()
-        )
-    );
+    FOR SELECT USING (auth.uid() = user_id);
 
 CREATE POLICY "Doctors can view all patient records" ON patient_records
     FOR SELECT USING (
-        EXISTS (
-            SELECT 1 FROM profiles 
-            WHERE id = auth.uid() AND role IN ('doctor', 'super_admin')
-        )
+        current_setting('request.jwt.claims', true)::json->>'role' IN ('doctor', 'super_admin')
     );
 
 -- System logs policies
 CREATE POLICY "Super admins can view all logs" ON system_logs
     FOR ALL USING (
-        EXISTS (
-            SELECT 1 FROM profiles 
-            WHERE id = auth.uid() AND role = 'super_admin'
-        )
+        current_setting('request.jwt.claims', true)::json->>'role' = 'super_admin'
     );
 
 -- Functions and triggers
@@ -174,3 +158,9 @@ CREATE INDEX IF NOT EXISTS idx_diagnoses_created_at ON diagnoses(created_at);
 CREATE INDEX IF NOT EXISTS idx_patient_records_diagnosis_id ON patient_records(diagnosis_id);
 CREATE INDEX IF NOT EXISTS idx_system_logs_user_id ON system_logs(user_id);
 CREATE INDEX IF NOT EXISTS idx_system_logs_created_at ON system_logs(created_at);
+
+-- Backfill user_id for existing records
+UPDATE patient_records
+SET user_id = d.user_id
+FROM diagnoses d
+WHERE patient_records.diagnosis_id = d.id;

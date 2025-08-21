@@ -371,7 +371,9 @@ export default function AdminDashboard() {
                 <p className="text-gray-600">View system performance</p>
               </div>
             </div>
-            <button className="w-full bg-green-600 text-white py-2 px-4 rounded-lg hover:bg-green-700 transition-colors">
+            <button 
+              onClick={() => router.push('/admin/analytics')}
+              className="w-full bg-green-600 text-white py-2 px-4 rounded-lg hover:bg-green-700 transition-colors">
               View Analytics
             </button>
           </div>
@@ -389,7 +391,9 @@ export default function AdminDashboard() {
                 <p className="text-gray-600">Configure system parameters</p>
               </div>
             </div>
-            <button className="w-full bg-purple-600 text-white py-2 px-4 rounded-lg hover:bg-purple-700 transition-colors">
+            <button 
+              onClick={() => router.push('/admin/settings')}
+              className="w-full bg-purple-600 text-white py-2 px-4 rounded-lg hover:bg-purple-700 transition-colors">
               Open Settings
             </button>
           </div>

@@ -28,6 +28,23 @@ export default function AuthPage() {
     }
   }, [searchParams])
 
+  async function sendResetFromAuth() {
+    setLoading(true)
+    setError('')
+    setSuccess('')
+    try {
+      if (!email) throw new Error('Enter your email above first')
+      const origin = typeof window !== 'undefined' ? window.location.origin : process.env.NEXT_PUBLIC_SITE_URL
+      const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${origin}/auth/reset` })
+      if (error) throw error
+      setSuccess('Password reset email sent. Check your inbox.')
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const handleAuth = async (e) => {
     e.preventDefault()
     setLoading(true)
@@ -337,6 +354,13 @@ export default function AuthPage() {
                   placeholder="Enter your password"
                 />
               </div>
+              {isLogin && (
+                <div className="mt-2 text-right">
+                  <button type="button" onClick={sendResetFromAuth} className="text-sm text-blue-300 hover:text-blue-200 underline">
+                    Forgot password?
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Success Message */}
