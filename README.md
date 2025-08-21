@@ -1,135 +1,206 @@
-# Clarix - AI-Powered Radiology Assistant
+# Clarix - AI-Powered Medical Imaging Platform
 
-An intelligent diagnostic support system that assists radiologists and doctors in interpreting medical images such as X-rays and MRIs using advanced AI technology.
+## 🩺 Overview
 
-## 🏗️ Tech Stack
+Clarix is a comprehensive AI-powered medical imaging platform designed for medical professionals and healthcare institutions. It provides advanced diagnostic insights for chest X-rays using deep learning models, along with a complete messaging system for doctor-patient communication.
 
-- **Frontend**: Next.js 15 with React 19
-- **Backend**: FastAPI (Python)
-- **Database**: Supabase (PostgreSQL)
-- **Authentication**: Supabase Auth
-- **Storage**: Supabase Storage
-- **Styling**: Tailwind CSS
+## ✨ Features
 
-## 🚀 Features
+- **AI-Powered Diagnosis**: Advanced chest X-ray analysis using DenseNet121 deep learning model
+- **Role-Based Access Control**: Separate interfaces for patients, doctors, and super admins
+- **Real-time Messaging**: Secure communication between patients and doctors
+- **Report Generation**: Professional PDF reports with patient information and analysis results
+- **Dashboard Analytics**: Comprehensive statistics and analysis tracking
+- **Admin Panel**: User management, system monitoring, and analytics
+- **Responsive Design**: Modern, mobile-friendly interface built with Next.js and Tailwind CSS
+- **Security**: End-to-end encryption and HIPAA-compliant data handling
 
-### Core Features
-- 📤 **Image Upload & Preview**: Support for DICOM, JPG, PNG formats
-- 🧠 **AI-Based Diagnosis**: Detects conditions like pneumonia, cardiomegaly, lung opacity, fractures
-- 📄 **Auto-Generated Reports**: Structured radiology reports with impression, findings, recommendations
-- 📊 **Heatmap Overlays**: Grad-CAM powered visualizations for abnormal regions
-- 👤 **Role-Based Access**: Secure login for users, doctors, and super admins
-- 🧠 **LLM-Based Q&A**: Domain-specific AI assistance for radiology questions
+## 🛠️ Tech Stack
+
+### Frontend
+- **Next.js 15** - React framework with App Router
+- **React 19** - Latest React features
+- **Tailwind CSS 4** - Modern utility-first CSS framework
+- **Supabase** - Authentication and real-time database
+
+### Backend
+- **FastAPI** - High-performance Python API framework
+- **PyTorch** - Deep learning model inference
+- **ONNX Runtime** - Optimized model deployment
+- **OpenCV** - Image processing
+- **Google Generative AI** - AI-powered chat responses
+
+### Database
+- **Supabase (PostgreSQL)** - Cloud database with real-time features
+- **Row Level Security (RLS)** - Fine-grained access control
+
+### AI/ML
+- **DenseNet121** - Pre-trained model for chest X-ray classification
+- **14-class pathology detection** - Including pneumonia, cardiomegaly, edema, etc.
+- **Image preprocessing** - CLAHE enhancement and normalization
 
 ### User Roles
-- **User**: Upload images, view predictions, review reports
-- **Doctor**: All user features + access to overlay maps and patient history
-- **Super Admin**: Full system control, user management, audit logs
+- **Patients/Users**: Upload medical images, view analyses, message doctors
+- **Doctors**: Review patient analyses, respond to consultations, generate reports
+- **Super Admins**: User management, system analytics, platform configuration
 
 ## 📋 Prerequisites
 
-- Node.js 18+ 
-- Python 3.8+
-- Supabase account
-- Git
+Before running this project, make sure you have:
 
-## 🛠️ Setup Instructions
+- **Node.js** (version 18 or higher)
+- **Python** (version 3.8 or higher)
+- **npm** or **yarn**
+- **Supabase account** (for database and authentication)
+- **Google AI API key** (for AI chat features)
 
-### 1. Clone and Install Dependencies
+## 🚀 Installation & Setup
+
+### 1. Clone the Repository
 
 ```bash
-# Frontend dependencies
+git clone https://github.com/Aryn-Lokare/Clarix.git
 cd Clarix
+```
+
+### 2. Frontend Setup
+
+```bash
+# Install Node.js dependencies
 npm install
 
-# Backend dependencies
-cd backend
+# Or using yarn
+yarn install
+```
+
+### 3. Backend Setup
+
+```bash
+# Create a virtual environment (recommended)
+python -m venv venv
+
+# Activate virtual environment
+# On Windows:
+venv\Scripts\activate
+# On macOS/Linux:
+source venv/bin/activate
+
+# Install Python dependencies
 pip install -r requirements.txt
 ```
 
-### 2. Supabase Setup
+### 4. Environment Configuration
 
-1. **Create Supabase Project**:
-   - Go to [supabase.com](https://supabase.com)
-   - Create a new project
-   - Note down your project URL and API keys
+Create environment files for both frontend and backend:
 
-2. **Database Schema**:
-   - Go to your Supabase dashboard
-   - Navigate to SQL Editor
-   - Run the contents of `backend/schema.sql`
-
-3. **Storage Bucket**:
-   - Go to Storage in your Supabase dashboard
-   - Create a new bucket called `medical-images`
-   - Set it to private with RLS enabled
-
-### 3. Environment Configuration
-
-Create `.env.local` in the root directory:
-
+#### Frontend Environment (`.env.local`)
 ```env
-# Supabase Configuration
 NEXT_PUBLIC_SUPABASE_URL=your_supabase_project_url
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
-
-# Backend API URL
-NEXT_PUBLIC_API_URL=http://localhost:8000
 ```
 
-Create `.env` in the `backend` directory:
-
+#### Backend Environment (`backend/.env`)
 ```env
-# Supabase Configuration
 SUPABASE_URL=your_supabase_project_url
 SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
-
-# API Configuration
-API_HOST=0.0.0.0
-API_PORT=8000
+GOOGLE_API_KEY=your_google_ai_api_key
+MODEL_PATH=./models/best_densenet.onnx
 ```
 
-### 4. Start the Application
+### 5. Database Setup
 
-```bash
-# Terminal 1: Start Frontend
-npm run dev
+1. **Create Supabase Project**: Sign up at [supabase.com](https://supabase.com) and create a new project
 
-# Terminal 2: Start Backend
-cd backend
-python main.py
-```
+2. **Run Database Schema**: Execute the SQL files in the `backend/` directory:
+   - `backend/schema.sql` - Main database schema
+   - `backend/contact-messages-schema.sql` - Contact and messaging tables
+   - `backend/create-diagnoses-table.sql` - Diagnoses tracking
 
-The application will be available at:
-- Frontend: http://localhost:3000
-- Backend API: http://localhost:8000
-- API Docs: http://localhost:8000/docs
+3. **Setup RLS Policies**: Run the following SQL to create the messaging view:
+   ```sql
+   CREATE OR REPLACE VIEW public.messaging_profiles AS
+   SELECT id, username, email, first_name, last_name, role
+   FROM public.profiles;
+   
+   GRANT SELECT ON public.messaging_profiles TO authenticated;
+   GRANT SELECT ON public.messaging_profiles TO anon;
+   ```
+
+4. **Create Admin User**: Run one of the admin creation scripts to set up your first super admin account
+
+### 6. AI Model Setup
+
+1. **Download Model**: Place your trained DenseNet121 model in `backend/models/`
+2. **Supported Formats**: `.onnx`, `.pt`, or `.pth` files
+3. **Model Name**: Use `best_densenet.onnx` or similar naming convention
+
+## 🏃‍♂️ Running the Application
+
+### Development Mode
+
+1. **Start the Backend Server**:
+   ```bash
+   cd backend
+   python -m uvicorn main:app --reload --port 8000
+   ```
+
+2. **Start the Frontend Development Server**:
+   ```bash
+   # In the root directory
+   npm run dev
+   ```
+
+3. **Access the Application**:
+   - Frontend: `http://localhost:3000`
+   - Backend API: `http://localhost:8000`
+   - API Documentation: `http://localhost:8000/docs`
+
+### Production Deployment
+
+1. **Build the Frontend**:
+   ```bash
+   npm run build
+   npm start
+   ```
+
+2. **Run Backend in Production**:
+   ```bash
+   cd backend
+   uvicorn main:app --host 0.0.0.0 --port 8000
+   ```
 
 ## 📁 Project Structure
 
 ```
 Clarix/
-├── app/                    # Next.js app directory
-│   ├── auth/              # Authentication pages
-│   ├── dashboard/         # User dashboard
-│   └── page.jsx          # Landing page
-├── components/            # React components
-├── lib/                  # Utilities and configurations
-├── backend/              # FastAPI backend
-│   ├── main.py          # Main API application
-│   ├── requirements.txt  # Python dependencies
-│   └── schema.sql       # Database schema
-└── public/              # Static assets
+├── app/                        # Next.js app directory
+│   ├── admin/                 # Admin panel pages
+│   ├── auth/                  # Authentication pages
+│   ├── dashboard/             # User dashboard
+│   ├── doctor/                # Doctor-specific pages
+│   ├── messages/              # Messaging interface
+│   └── api/                   # API routes
+├── backend/                   # Python FastAPI backend
+│   ├── main.py               # Main API application
+│   ├── models/               # AI model files
+│   └── *.sql                 # Database schema files
+├── components/               # Reusable React components
+├── lib/                     # Utility libraries
+├── public/                  # Static assets
+├── requirements.txt         # Python dependencies
+├── package.json            # Node.js dependencies
+└── README.md              # This file
 ```
 
-## 🔐 Authentication Flow
+## 🔐 Security Features
 
-1. **Sign Up**: Users can register with email/password and select role
-2. **Email Verification**: Supabase sends confirmation email
-3. **Login**: Users authenticate with email/password
-4. **Role-Based Access**: Different features based on user role
-5. **Session Management**: JWT tokens handled by Supabase
+- **Authentication**: Secure user authentication via Supabase
+- **Authorization**: Role-based access control (RBAC)
+- **Data Privacy**: HIPAA-compliant data handling
+- **Encryption**: End-to-end encrypted communications
+- **RLS**: Row-level security in database
+- **Input Validation**: Comprehensive input sanitization
 
 ## 🗄️ Database Schema
 
@@ -144,14 +215,25 @@ Clarix/
 - Role-based access policies
 - JWT token authentication
 
-## 🔧 API Endpoints
+## 🧪 Testing
 
-### Authentication
-- `POST /api/diagnose` - Create new diagnosis
-- `GET /api/diagnoses` - Get user's diagnoses
-- `GET /api/diagnoses/{id}` - Get specific diagnosis
-- `PUT /api/diagnoses/{id}/status` - Update diagnosis status
-- `POST /api/diagnoses/{id}/analyze` - Trigger AI analysis
+```bash
+# Run frontend tests
+npm test
+
+# Run backend tests
+cd backend
+python -m pytest
+
+# Test AI model
+python test_model.py
+```
+
+## 📊 API Documentation
+
+The API documentation is automatically generated and available at:
+- Development: `http://localhost:8000/docs`
+- Interactive API explorer with all endpoints documented
 
 ## 🚀 Deployment
 
@@ -170,14 +252,9 @@ pip install -r requirements.txt
 # Deploy to Railway or Render
 ```
 
-## 🔮 Future Enhancements
+## 🏥 Medical Disclaimer
 
-- [ ] Real AI model integration (CheXNet/CheXAgent)
-- [ ] Advanced image preprocessing
-- [ ] Real-time collaboration features
-- [ ] Mobile app development
-- [ ] Advanced reporting templates
-- [ ] Integration with PACS systems
+This software is intended for educational and research purposes only. It should not be used as a substitute for professional medical diagnosis or treatment. Always consult with qualified healthcare professionals for medical decisions.
 
 ## 🤝 Contributing
 
@@ -193,8 +270,11 @@ This project is licensed under the MIT License.
 
 ## 🆘 Support
 
-For support, email support@clarix.com or create an issue in the repository.
+For support and questions:
+- Create an issue on GitHub
+- Contact the development team
+- Check the documentation at `/docs`
 
 ---
 
-**Note**: This is a development version. For production use, ensure proper security measures, HIPAA compliance, and thorough testing.
+**Clarix** - Advancing healthcare through AI-powered medical imaging solutions.
