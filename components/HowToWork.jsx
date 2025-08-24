@@ -62,7 +62,7 @@ export default function HowToWork() {
         <button 
           onClick={handleStartTrial}
           disabled={loading}
-          className="bg-blue-500 hover:bg-blue-600 text-white font-semibold px-6 py-3 rounded-full transition disabled:opacity-50 disabled:cursor-not-allowed"
+          className="bg-blue-500 hover:bg-blue-600 text-white font-semibold px-6 py-3 rounded-full transition disabled:opacity-50 disabled:cursor-not-allowed font-satoshi font-bold"
         >
           {loading ? (
             <div className="flex items-center justify-center">

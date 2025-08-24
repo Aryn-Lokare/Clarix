@@ -18,12 +18,12 @@ export default function HeroSection() {
       <div className="relative z-10 text-center max-w-5xl mx-auto">
         {/* Main heading */}
         <div className="mb-8">
-          <h1 className="text-4xl sm:text-6xl lg:text-7xl font-bold leading-tight mb-4">
+          <h1 className="text-4xl sm:text-6xl lg:text-7xl font-bold leading-tight mb-4 font-satoshi font-bold">
             <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600">
               Clarity in every scan.
             </span>
           </h1>
-          <h2 className="text-3xl sm:text-5xl lg:text-6xl font-bold text-gray-900 mb-6">
+          <h2 className="text-3xl sm:text-5xl lg:text-6xl font-bold text-gray-900 mb-6 font-satoshi font-bold ">
             Powered by AI
           </h2>
         </div>
@@ -36,7 +36,7 @@ export default function HeroSection() {
         </p>
 
         {/* CTA Buttons */}
-        <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-12">
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-12 font-satoshi font-bold">
           <button 
             onClick={handleGetStarted}
             disabled={loading}
@@ -58,7 +58,7 @@ export default function HeroSection() {
           <button 
             onClick={handleBookDemo}
             disabled={loading}
-            className="px-8 py-4 bg-transparent text-blue-600 font-semibold border-2 border-blue-600 rounded-xl hover:bg-blue-600 hover:text-white transform hover:-translate-y-1 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-8 py-4 bg-transparent text-blue-600 font-semibold border-2 border-blue-600 rounded-xl hover:bg-blue-600 hover:text-white transform hover:-translate-y-1 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed font-satoshi"
           >
             {user ? 'Book Demo' : 'Book Demo →'}
           </button>

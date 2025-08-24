@@ -11,6 +11,9 @@ import uuid
 import io
 from PIL import Image
 import numpy as np
+import cv2
+import torch
+import base64
 
 # Load environment variables
 load_dotenv()
@@ -72,9 +75,9 @@ def _load_model_if_needed():
         _model_loaded = True
         return
     try:
-        if model_path.lower().endswith('.onnx'):
+        if model_path.lower().endswith(".onnx"):
             import onnxruntime as ort
-            _onnx_session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"]) 
+            _onnx_session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
             _use_onnx = True
         else:
             import torch
@@ -179,8 +182,7 @@ def _postprocess(logits: np.ndarray):
     #     "Pleural_Thickening", "No Finding"
     # ]
     
-    # If above doesn't work, try these alternatives by commenting out the current
-    # mapping and uncommenting one of these:
+    # If above doesn't work, try these alternatives by uncommenting one of these:
     
     # Option A - NIH ChestX-ray14 Standard Order:
     # default_labels = [
@@ -291,13 +293,13 @@ def run_inference(image_np: np.ndarray):
             with torch.no_grad():
                 tensor = torch.from_numpy(inp)
                 print(f"[inference] PyTorch tensor shape: {tensor.shape}")
-                logits = _torch_model(tensor)
-                if hasattr(logits, 'detach'):
-                    logits = logits.detach().cpu().numpy()
+                logits_tensor = _torch_model(tensor)
+                if hasattr(logits_tensor, 'detach'):
+                    logits = logits_tensor.detach().cpu().numpy()
                 else:
-                    logits = np.array(logits)
+                    logits = np.array(logits_tensor)
                 print(f"[inference] PyTorch output shape: {logits.shape}")
-        
+
         predictions = _postprocess(logits)
         print(f"[inference] Postprocessed predictions: {predictions}")
         return {"predictions": predictions}
@@ -735,7 +737,8 @@ async def analyze_diagnosis(
                 "Consider follow-up chest X-ray in 2-3 days",
                 "Clinical correlation recommended",
                 "Consider CT scan if symptoms persist"
-            ]
+            ],
+            "disclaimer": "The report is ai generated , plaese consult with the doctors for safety reasons "
         }
         
         # Update diagnosis with results

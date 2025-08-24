@@ -73,21 +73,21 @@ const Navbar = () => {
               </span>
               <Link 
                 href="/dashboard"
-                className="text-blue-600 hover:text-blue-700 font-medium py-2 px-4 border border-blue-600 rounded-lg hover:bg-blue-50 transition duration-300"
+                className="text-blue-600 hover:text-blue-700 font-medium py-2 px-4 border border-blue-600 rounded-lg hover:bg-blue-50 transition duration-300 font-satoshi"
               >
                 Dashboard
               </Link>
               {profile?.role === 'super_admin' && (
                 <Link 
                   href="/admin"
-                  className="text-purple-600 hover:text-purple-700 font-medium py-2 px-4 border border-purple-600 rounded-lg hover:bg-purple-50 transition duration-300"
+                  className="text-purple-600 hover:text-purple-700 font-medium py-2 px-4 border border-purple-600 rounded-lg hover:bg-purple-50 transition duration-300 font-satoshi"
                 >
                   Admin
                 </Link>
               )}
               <button 
                 onClick={handleSignOut}
-                className="bg-red-500 text-white font-medium py-1.5 px-3 text-sm rounded-md hover:bg-red-600 transition duration-300"
+                className="bg-red-500 text-white font-medium py-1.5 px-3 text-sm rounded-md hover:bg-red-600 transition duration-300 font-satoshi "
               >
                 Sign Out
               </button>
@@ -95,7 +95,7 @@ const Navbar = () => {
           ) : (
             <Link 
               href="/auth"
-              className="bg-blue-500 text-white font-bold py-2 px-6 rounded-lg hover:bg-blue-600 transition duration-300"
+              className="bg-blue-500 text-white font-bold py-2 px-6 rounded-lg hover:bg-blue-600 transition duration-300 font-satoshi "
             >
               Sign Up
             </Link>

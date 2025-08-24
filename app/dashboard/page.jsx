@@ -21,6 +21,13 @@ export default function Dashboard() {
   const [showPrediction, setShowPrediction] = useState(false)
   const [diagError, setDiagError] = useState('')
   const router = useRouter()
+  const [patientDetails, setPatientDetails] = useState({
+    name: '',
+    age: '',
+    sex: '',
+    date: '',
+    time: ''
+  })
 
   useEffect(() => {
     checkAuth()
@@ -116,6 +123,11 @@ export default function Dashboard() {
     }
   }
 
+  const handlePatientDetailsChange = (event) => {
+    const { name, value } = event.target
+    setPatientDetails(prev => ({ ...prev, [name]: value }))
+  }
+
   const handleFileUpload = async () => {
     if (!selectedFile) return
 
@@ -165,10 +177,9 @@ export default function Dashboard() {
         .from('diagnoses')
         .insert({
           user_id: user.id,
-          image_path: selectedFile.name, // Changed from image_name to image_path
+          image_name: selectedFile.name,
           predictions: result,
           status: 'completed'
-          // Removed created_at as it has a default value
         })
 
       if (error) throw error
@@ -176,7 +187,7 @@ export default function Dashboard() {
       // Reload diagnoses to update stats
       await loadDiagnoses(user.id)
     } catch (error) {
-      console.error('Error saving diagnosis:', error)
+      console.error('Error saving diagnosis:', JSON.stringify(error, null, 2))
     }
   }
 
@@ -186,9 +197,13 @@ export default function Dashboard() {
   }
 
   const buildReportHtml = (imgUrl) => {
-    const fullName = [profile?.first_name, profile?.last_name].filter(Boolean).join(' ') || 'User';
     const preds = (prediction?.predictions || []).map(p => `<tr><td style="padding:8px;border:1px solid #e5e7eb;">${p.label}</td><td style="padding:8px;border:1px solid #e5e7eb;">${(p.confidence*100).toFixed(1)}%</td></tr>`).join('');
     const date = new Date().toLocaleString();
+    const heatmapHtml = prediction.heatmap ? `<div class="section">
+          <h2 style="font-size:18px;margin:0 0 6px 0">Heatmap</h2>
+          <img src="data:image/jpeg;base64,${prediction.heatmap}" alt="Heatmap" />
+        </div>` : '';
+
     return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Clarix Report</title>
       <style>
         body{font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial; color:#111827;}
@@ -198,6 +213,7 @@ export default function Dashboard() {
         .section{margin-top:16px}
         img{max-width:100%;border:1px solid #e5e7eb;border-radius:8px}
         table{border-collapse:collapse;width:100%;margin-top:8px}
+        .disclaimer{margin-top:24px;padding:12px;background-color:#fef2f2;border:1px solid #fecaca;border-radius:8px;color:#991b1b;}
       </style>
     </head><body>
       <div class="container">
@@ -205,17 +221,23 @@ export default function Dashboard() {
         <div class="muted">Generated: ${date}</div>
         <div class="section">
           <h2 style="font-size:18px;margin:0 0 6px 0">Patient Info</h2>
-          <div>Name: ${fullName}</div>
-          <div>Email: ${profile?.email || user?.email || ''}</div>
-          <div>User ID: ${user?.id || ''}</div>
+          <div>Name: ${patientDetails.name}</div>
+          <div>Age: ${patientDetails.age}</div>
+          <div>Sex: ${patientDetails.sex}</div>
+          <div>Date: ${patientDetails.date}</div>
+          <div>Time: ${patientDetails.time}</div>
         </div>
         <div class="section">
           <h2 style="font-size:18px;margin:0 0 6px 0">Uploaded Image</h2>
           ${imgUrl ? `<img src="${imgUrl}" alt="Uploaded image" />` : '<div class="muted">Image preview unavailable</div>'}
         </div>
+        ${heatmapHtml}
         <div class="section">
           <h2 style="font-size:18px;margin:0 0 6px 0">AI Analysis Results</h2>
           ${preds ? `<table><thead><tr><th style="text-align:left;padding:8px;border:1px solid #e5e7eb;background:#f9fafb">Finding</th><th style="text-align:left;padding:8px;border:1px solid #e5e7eb;background:#f9fafb">Confidence</th></tr></thead><tbody>${preds}</tbody></table>` : '<div class="muted">No predictions available</div>'}
+        </div>
+        <div class="disclaimer">
+          <strong>Disclaimer:</strong> The report is AI generated, please consult with the doctors for safety reasons.
         </div>
       </div>
       <script>window.onload = function(){ setTimeout(function(){ window.print(); }, 400); };</script>
@@ -393,6 +415,50 @@ export default function Dashboard() {
             <div className="bg-white rounded-xl p-8 shadow-sm border border-gray-200">
               <h3 className="text-xl font-semibold text-gray-900 mb-4">New Analysis</h3>
               
+              {/* Patient Details Form */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                <input
+                  type="text"
+                  name="name"
+                  placeholder="Patient Name"
+                  value={patientDetails.name}
+                  onChange={handlePatientDetailsChange}
+                  className="p-2 border border-gray-300 rounded-lg"
+                />
+                <input
+                  type="number"
+                  name="age"
+                  placeholder="Patient Age"
+                  value={patientDetails.age}
+                  onChange={handlePatientDetailsChange}
+                  className="p-2 border border-gray-300 rounded-lg"
+                />
+                <input
+                  type="text"
+                  name="sex"
+                  placeholder="Patient Sex"
+                  value={patientDetails.sex}
+                  onChange={handlePatientDetailsChange}
+                  className="p-2 border border-gray-300 rounded-lg"
+                />
+                <input
+                  type="date"
+                  name="date"
+                  placeholder="Date"
+                  value={patientDetails.date}
+                  onChange={handlePatientDetailsChange}
+                  className="p-2 border border-gray-300 rounded-lg"
+                />
+                <input
+                  type="time"
+                  name="time"
+                  placeholder="Time"
+                  value={patientDetails.time}
+                  onChange={handlePatientDetailsChange}
+                  className="p-2 border border-gray-300 rounded-lg"
+                />
+              </div>
+
               {/* Hidden file input */}
               <input
                 id="file-input"
