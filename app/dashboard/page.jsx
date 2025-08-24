@@ -133,8 +133,20 @@ export default function Dashboard() {
 
     setUploading(true)
     try {
-      // Get current session for authentication
-      const { data: { session } } = await supabase.auth.getSession()
+      // Get current session for authentication with refresh
+      let { data: { session }, error: sessionError } = await supabase.auth.getSession()
+      if (sessionError) {
+        console.error('Session error:', sessionError)
+        // Try to refresh the session
+        const { data: { session: refreshedSession }, error: refreshError } = await supabase.auth.refreshSession()
+        if (refreshError) {
+          throw new Error('Authentication failed. Please sign in again.')
+        }
+        if (!refreshedSession) {
+          throw new Error('No active session')
+        }
+        session = refreshedSession
+      }
       if (!session) {
         throw new Error('No active session')
       }
@@ -177,7 +189,7 @@ export default function Dashboard() {
         .from('diagnoses')
         .insert({
           user_id: user.id,
-          image_name: selectedFile.name,
+          image_path: selectedFile.name, // Changed from image_name to image_path
           predictions: result,
           status: 'completed'
         })
@@ -423,7 +435,7 @@ export default function Dashboard() {
                   placeholder="Patient Name"
                   value={patientDetails.name}
                   onChange={handlePatientDetailsChange}
-                  className="p-2 border border-gray-300 rounded-lg"
+                  className="p-2 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
                 <input
                   type="number"
@@ -431,7 +443,7 @@ export default function Dashboard() {
                   placeholder="Patient Age"
                   value={patientDetails.age}
                   onChange={handlePatientDetailsChange}
-                  className="p-2 border border-gray-300 rounded-lg"
+                  className="p-2 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
                 <input
                   type="text"
@@ -439,7 +451,7 @@ export default function Dashboard() {
                   placeholder="Patient Sex"
                   value={patientDetails.sex}
                   onChange={handlePatientDetailsChange}
-                  className="p-2 border border-gray-300 rounded-lg"
+                  className="p-2 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
                 <input
                   type="date"
@@ -447,7 +459,7 @@ export default function Dashboard() {
                   placeholder="Date"
                   value={patientDetails.date}
                   onChange={handlePatientDetailsChange}
-                  className="p-2 border border-gray-300 rounded-lg"
+                  className="p-2 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
                 <input
                   type="time"
@@ -455,7 +467,7 @@ export default function Dashboard() {
                   placeholder="Time"
                   value={patientDetails.time}
                   onChange={handlePatientDetailsChange}
-                  className="p-2 border border-gray-300 rounded-lg"
+                  className="p-2 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
 
